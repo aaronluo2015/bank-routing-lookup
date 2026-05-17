@@ -1,69 +1,54 @@
-import { BankRecord, RoutingCodeType } from './types';
 import fs from 'fs';
 import path from 'path';
+import { BankRecord, RoutingCodeType } from './types';
 
-const DB_PATH = path.join(process.cwd(), 'src/data/banks.json');
+const CHUNKS_DIR = path.join(process.cwd(), 'src/data/chunks');
 
-interface DbCache {
+let db: {
   records: BankRecord[];
   index: Map<string, BankRecord>;
-  meta: { lastUpdated: string; version: string; total: number };
-}
-
-let cache: DbCache | null = null;
+} | null = null;
 
 function getNormalizedKey(code: string, type: RoutingCodeType): string {
   return `${type}:${code.replace(/[\s\-\.]/g, '').toUpperCase()}`;
 }
 
-function ensureCache(): DbCache {
-  if (cache) return cache;
+function ensureDb() {
+  if (db) return db;
 
   const index = new Map<string, BankRecord>();
-  let records: BankRecord[] = [];
+  const records: BankRecord[] = [];
 
-  if (fs.existsSync(DB_PATH)) {
-    try {
-      records = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-      if (!Array.isArray(records)) records = [];
-    } catch {
-      records = [];
+  if (fs.existsSync(CHUNKS_DIR)) {
+    const files = fs.readdirSync(CHUNKS_DIR).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const data: BankRecord[] = JSON.parse(
+          fs.readFileSync(path.join(CHUNKS_DIR, file), 'utf-8')
+        );
+        if (Array.isArray(data)) {
+          for (const record of data) {
+            index.set(getNormalizedKey(record.code, record.type), record);
+          }
+          records.push(...data);
+        }
+      } catch { /* skip bad files */ }
     }
   }
 
-  for (const record of records) {
-    index.set(getNormalizedKey(record.code, record.type), record);
-  }
-
-  cache = {
-    records,
-    index,
-    meta: {
-      lastUpdated: new Date().toISOString(),
-      version: '1.0.0',
-      total: records.length,
-    },
-  };
-
-  return cache;
-}
-
-function persist(): void {
-  if (!cache) return;
-  const dir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(DB_PATH, JSON.stringify(cache.records, null, 2), 'utf-8');
+  db = { records, index };
+  return db;
 }
 
 export function getFromLocalDb(code: string, type: RoutingCodeType): BankRecord | null {
-  const db = ensureCache();
-  return db.index.get(getNormalizedKey(code, type)) || null;
+  const d = ensureDb();
+  return d.index.get(getNormalizedKey(code, type)) || null;
 }
 
 export function searchLocalDb(query: string): BankRecord[] {
-  const db = ensureCache();
+  const d = ensureDb();
   const lower = query.toLowerCase();
-  return db.records.filter(r =>
+  return d.records.filter(r =>
     r.code.toLowerCase().includes(lower) ||
     r.bankName.toLowerCase().includes(lower) ||
     (r.city?.toLowerCase().includes(lower)) ||
@@ -72,67 +57,95 @@ export function searchLocalDb(query: string): BankRecord[] {
 }
 
 export function saveToLocalDb(record: BankRecord): void {
-  const db = ensureCache();
+  const d = ensureDb();
   const key = getNormalizedKey(record.code, record.type);
-  const idx = db.records.findIndex(r => getNormalizedKey(r.code, r.type) === key);
-
-  if (idx >= 0) {
-    db.records[idx] = record;
-  } else {
-    db.records.push(record);
-  }
-  db.index.set(key, record);
-  db.meta.lastUpdated = new Date().toISOString();
-  db.meta.total = db.records.length;
-  persist();
+  const idx = d.records.findIndex(r => getNormalizedKey(r.code, r.type) === key);
+  if (idx >= 0) d.records[idx] = record;
+  else d.records.push(record);
+  d.index.set(key, record);
+  saveChunk(record.type, record);
 }
 
 export function saveManyToLocalDb(records: BankRecord[]): void {
-  const db = ensureCache();
+  const d = ensureDb();
   for (const record of records) {
     const key = getNormalizedKey(record.code, record.type);
-    const idx = db.records.findIndex(r => getNormalizedKey(r.code, r.type) === key);
-    if (idx >= 0) {
-      db.records[idx] = record;
-    } else {
-      db.records.push(record);
-    }
-    db.index.set(key, record);
+    const idx = d.records.findIndex(r => getNormalizedKey(r.code, r.type) === key);
+    if (idx >= 0) d.records[idx] = record;
+    else d.records.push(record);
+    d.index.set(key, record);
   }
-  db.meta.lastUpdated = new Date().toISOString();
-  db.meta.total = db.records.length;
-  persist();
+  persistAll();
 }
 
 export function deleteFromLocalDb(code: string, type: RoutingCodeType): boolean {
-  const db = ensureCache();
+  const d = ensureDb();
   const key = getNormalizedKey(code, type);
-  const idx = db.records.findIndex(r => getNormalizedKey(r.code, r.type) === key);
+  const idx = d.records.findIndex(r => getNormalizedKey(r.code, r.type) === key);
   if (idx < 0) return false;
-  db.records.splice(idx, 1);
-  db.index.delete(key);
-  db.meta.total = db.records.length;
-  persist();
+  d.records.splice(idx, 1);
+  d.index.delete(key);
+  persistAll();
   return true;
 }
 
 export function getLocalDbStats() {
-  const db = ensureCache();
-  const avgConfidence = db.records.length > 0
-    ? Math.round(db.records.reduce((sum, r) => sum + r.confidence, 0) / db.records.length)
+  const d = ensureDb();
+  const avg = d.records.length > 0
+    ? Math.round(d.records.reduce((s, r) => s + (r.confidence || 80), 0) / d.records.length)
     : 0;
-  return { size: db.records.length, avgConfidence, lastUpdated: db.meta.lastUpdated };
-}
-
-export function getLowConfidenceRecords(minConfidence: number = 70): BankRecord[] {
-  return ensureCache().records.filter(r => r.confidence < minConfidence);
+  return { size: d.records.length, avgConfidence: avg, lastUpdated: new Date().toISOString() };
 }
 
 export function getAllRecords(): BankRecord[] {
-  return ensureCache().records;
+  return ensureDb().records;
 }
 
 export function reloadDb(): void {
-  cache = null;
-  ensureCache();
+  db = null;
+  ensureDb();
+}
+
+export function getLowConfidenceRecords(minConfidence: number = 70): BankRecord[] {
+  return ensureDb().records.filter(r => (r.confidence || 80) < minConfidence);
+}
+
+function saveChunk(type: string, record: BankRecord): void {
+  if (!fs.existsSync(CHUNKS_DIR)) fs.mkdirSync(CHUNKS_DIR, { recursive: true });
+  const d = ensureDb();
+  const chunkFiles = fs.readdirSync(CHUNKS_DIR).filter(f => f.endsWith('.json'));
+
+  // Find the right chunk file for this type
+  for (const file of chunkFiles) {
+    if (file.startsWith(type)) {
+      const data: BankRecord[] = JSON.parse(fs.readFileSync(path.join(CHUNKS_DIR, file), 'utf-8'));
+      const key = getNormalizedKey(record.code, record.type as RoutingCodeType);
+      const idx = data.findIndex(r => getNormalizedKey(r.code, r.type as RoutingCodeType) === key);
+      if (idx >= 0) data[idx] = record;
+      else data.push(record);
+      fs.writeFileSync(path.join(CHUNKS_DIR, file), JSON.stringify(data), 'utf-8');
+      return;
+    }
+  }
+
+  // New type, create chunk
+  const newFile = `${type}.json`;
+  fs.writeFileSync(path.join(CHUNKS_DIR, newFile), JSON.stringify([record]), 'utf-8');
+}
+
+function persistAll(): void {
+  const d = ensureDb();
+  if (!fs.existsSync(CHUNKS_DIR)) fs.mkdirSync(CHUNKS_DIR, { recursive: true });
+
+  // Group by type
+  const groups: Record<string, BankRecord[]> = {};
+  for (const record of d.records) {
+    const prefix = record.type.startsWith('swift-') ? record.type :
+      record.type === 'swift' ? `swift-${record.code.substring(0, 2)}` : record.type;
+    (groups[prefix] ||= []).push(record);
+  }
+
+  for (const [prefix, recs] of Object.entries(groups)) {
+    fs.writeFileSync(path.join(CHUNKS_DIR, `${prefix}.json`), JSON.stringify(recs), 'utf-8');
+  }
 }

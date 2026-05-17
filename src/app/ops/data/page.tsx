@@ -131,10 +131,10 @@ export default function OpsDataPage() {
                 <div className="flex flex-wrap gap-1">{selected.sources.map(s => <span key={s} className="px-2 py-0.5 bg-gray-100 rounded text-[10px]">{s}</span>)}</div>
               </div>
             )}
-            {selected.sourceLog?.length > 0 && (
+            {selected.sourceLog && selected.sourceLog.length > 0 && (
               <div className="mt-3 pt-3 border-t"><p className="text-xs text-gray-400 mb-1">Source Log ({selected.sourceLog.length} entries):</p>
                 <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                  {selected.sourceLog.slice(-10).map((log: any, i: number) => (
+                  {(selected.sourceLog || []).slice(-10).map((log: any, i: number) => (
                     <div key={i} className="flex items-center gap-1 text-[10px]">
                       <span className={log.success ? 'text-green-500' : 'text-red-400'}>{log.success ? '✓' : '✗'}</span>
                       <span className="text-gray-500">{log.source}</span>

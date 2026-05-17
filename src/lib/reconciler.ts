@@ -51,7 +51,7 @@ export async function lookupWithReconciler(
     const result: ReconciledRecord = {
       record: local,
       confidence: local.confidence,
-      conflicts: local.conflicts,
+      conflicts: local.conflicts || [],
     };
     cacheSet(cacheKey, result, 3600000);
     return result;
