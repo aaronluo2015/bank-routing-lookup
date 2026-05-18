@@ -131,20 +131,27 @@ async function fetchSwiftCodePage(url: string): Promise<BankEntry | null> {
   if (!/^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/i.test(code)) return null;
 
   // Parse title: "XXXXXXXX是Bank Name的SWIFT代码"
-  const nameMatch = html.match(/是(.+?)的SWIFT代码/);
-  const bankName = nameMatch?.[1]?.trim();
+  // Only match within first 5KB (title area), not from FAQ at page bottom
+  const headSection = html.slice(0, 5000);
+  const nameMatch = headSection.match(/是(.+?)的SWIFT代码/);
+  let bankName = nameMatch?.[1]?.trim();
   if (!bankName) return null;
+
+  // Reject invalid names (too long, contains HTML, or is FAQ text)
+  if (bankName.length > 150 || /<[^>]+>/.test(bankName) || /银行识别码/.test(bankName)) {
+    return null;
+  }
 
   const countryCode = code.substring(4, 6);
 
-  // Parse country
-  const countryMatch = html.match(/国家\/地区[：:]\s*([^<\n]+)/);
+  // Parse country from the head section only
+  const countryMatch = headSection.match(/国家\/地区[：:]\s*([^<\n]+)/);
   const countryName = countryMatch?.[1]?.trim() || COUNTRY_NAMES[countryCode] || '';
 
-  // Parse city
-  const cityMatch = html.match(/城市[：:]\s*([^<\n]+)/);
+  // Parse city from head section only
+  const cityMatch = headSection.match(/城市[：:]\s*([^<\n]+)/);
   let city = cityMatch?.[1]?.trim() || '';
-  if (city === '\\N' || city === 'N') city = '';
+  if (city === '\\N' || city === 'N' || city.length > 100) city = '';
 
   // Parse address
   const addrMatch = html.match(/银行地址[：:]\s*([^<\n]+)/);
