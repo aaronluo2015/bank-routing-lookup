@@ -5,6 +5,16 @@
 import fs from 'fs';
 import path from 'path';
 
+// Use require for undici (tsx import has issues with it)
+const { ProxyAgent, setGlobalDispatcher } = require('undici');
+
+// Set proxy for Node.js fetch
+const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'http://127.0.0.1:10809';
+try {
+  setGlobalDispatcher(new ProxyAgent(PROXY_URL));
+  console.log(`Using proxy: ${PROXY_URL}`);
+} catch { /* ignore */ }
+
 const CHUNKS_DIR = path.join(process.cwd(), 'src/data/chunks');
 const SITEMAP_URLS = [
   'https://static.xtransfer.com/sitemaps/myswiftcodes/sitemap-myswiftcodes-en-1.xml',
@@ -40,7 +50,7 @@ async function fetchHtml(url: string, retries = 2): Promise<string | null> {
   for (let i = 0; i < retries; i++) {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 20000); // 20s timeout
+      const t = setTimeout(() => ctrl.abort(), 20000);
       const res = await fetch(url, {
         signal: ctrl.signal,
         headers: {
@@ -52,15 +62,21 @@ async function fetchHtml(url: string, retries = 2): Promise<string | null> {
       clearTimeout(t);
 
       if (res.status === 429) {
+        if (i === 0) console.log('  Rate limited, waiting...');
         await new Promise(r => setTimeout(r, 5000 + Math.random() * 5000));
         continue;
       }
-      if (!res.ok) return null;
+      if (!res.ok) {
+        if (i === 0) console.log(`  HTTP ${res.status} for ${url.slice(-20)}`);
+        return null;
+      }
 
       const html = await res.text();
       if (html.length < 500) continue;
       return html;
-    } catch {
+    } catch (e: any) {
+      const msg = e?.message || e?.toString() || String(e);
+      if (i === 0) console.log(`  Err: ${msg.slice(0, 80)}`);
       await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
     }
   }
