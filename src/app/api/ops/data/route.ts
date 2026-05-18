@@ -3,9 +3,16 @@ import { getAllRecords, deleteFromLocalDb, searchLocalDb } from '@/lib/local-db'
 import { RoutingCodeType } from '@/lib/types';
 
 export async function GET(request: NextRequest) {
-  const query = request.nextUrl.searchParams.get('q');
-  const records = query ? searchLocalDb(query) : getAllRecords();
-  return Response.json({ records: records.slice(0, 200), total: records.length });
+  const query = request.nextUrl.searchParams.get('q') || '';
+  const page = Math.max(1, parseInt(request.nextUrl.searchParams.get('page') || '1'));
+  const perPage = Math.min(100, Math.max(10, parseInt(request.nextUrl.searchParams.get('perPage') || '20')));
+
+  const all = query ? searchLocalDb(query) : getAllRecords();
+  const total = all.length;
+  const start = (page - 1) * perPage;
+  const records = all.slice(start, start + perPage);
+
+  return Response.json({ records, total, page, perPage });
 }
 
 export async function DELETE(request: NextRequest) {
